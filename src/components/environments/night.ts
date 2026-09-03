@@ -63,11 +63,16 @@ export function createNightEnvironment(): FlightEnvironment {
       scene.globe.showGroundAtmosphere = true;
 
       // A cool, deep rim of atmosphere against the black.
+      //
+      // The sun is still wherever it really is, so the atmosphere shader is
+      // lit whatever we do to the globe. It has to be pulled a long way down
+      // -- at -0.35 the horizon was still a bright daylight teal band, which
+      // undid the whole effect.
       configureSky(scene, {
         show: true,
-        hueShift: -0.08,
-        saturationShift: 0.25,
-        brightnessShift: -0.35,
+        hueShift: -0.04,
+        saturationShift: 0.15,
+        brightnessShift: -0.72,
       });
 
       scene.fog.enabled = true;

@@ -25,7 +25,7 @@ import type { CesiumModule } from "@/lib/cesium/bootstrap";
 type Cesium = CesiumModule;
 
 /** Deck geometry. A weather feed would eventually supply these. */
-const CLOUD_COUNT = 140;
+const CLOUD_COUNT = 90;
 /** Metres above sea level. A typical mid-level deck. */
 const DECK_ALTITUDE_M = 6_500;
 const DECK_THICKNESS_M = 2_200;
@@ -73,16 +73,20 @@ export function createCloudsEnvironment(): FlightEnvironment {
       const altitude =
         DECK_ALTITUDE_M + (random() * 2 - 1) * (DECK_THICKNESS_M / 2);
 
-      const width = 2_400 + random() * 7_000;
-      const depth = 2_000 + random() * 5_500;
-      const height = 700 + random() * 1_600;
+      // Fewer, larger clouds read as a weather system; many small ones read
+      // as noise, which is what the first pass looked like.
+      const width = 6_000 + random() * 13_000;
+      const depth = 5_000 + random() * 11_000;
+      const height = 1_400 + random() * 2_600;
 
       clouds.add({
         position: cesium.Cartesian3.fromDegrees(cloudLon, cloudLat, altitude),
         scale: new cesium.Cartesian2(width, depth),
         maximumSize: new cesium.Cartesian3(width / 2, depth / 2, height),
-        slice: 0.3 + random() * 0.4,
-        brightness: 0.75 + random() * 0.25,
+        // A higher slice takes a fuller cross-section through the cloud
+        // volume, giving solid puffs rather than wispy fragments.
+        slice: 0.45 + random() * 0.3,
+        brightness: 0.85 + random() * 0.15,
       });
     }
 
@@ -119,8 +123,9 @@ export function createCloudsEnvironment(): FlightEnvironment {
 
       clouds = scene.primitives.add(
         new context.cesium.CloudCollection({
-          // Higher detail than the default: these are seen from close range.
-          noiseDetail: 20,
+          // Lower detail than the default gives smoother, more billowy
+          // shapes; high detail turns into speckle at the sizes used here.
+          noiseDetail: 10,
           show: true,
         }),
       ) as InstanceType<Cesium["CloudCollection"]>;

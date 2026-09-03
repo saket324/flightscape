@@ -102,22 +102,30 @@ export function createDreamEnvironment(): FlightEnvironment {
       viewer = context.viewer;
       const { scene } = context.viewer;
 
-      // Push the imagery toward violet and drain the greens.
-      context.baseLayer.hue = 0.62;
-      context.baseLayer.saturation = 1.9;
-      context.baseLayer.brightness = 0.95;
-      context.baseLayer.contrast = 1.3;
-      context.baseLayer.gamma = 0.8;
+      // Push the imagery toward violet and teal.
+      //
+      // Hue shift is additive and wraps, so the target matters more than the
+      // size of the shift. Land sits around hue 0.1-0.3 (green through
+      // brown); +0.45 lands it at 0.55-0.75, which is cyan through violet.
+      // A larger shift overshoots into magenta and the whole world turns
+      // hot pink, which reads as a broken colour filter rather than a dream.
+      context.baseLayer.hue = 0.45;
+      context.baseLayer.saturation = 1.5;
+      context.baseLayer.brightness = 0.9;
+      context.baseLayer.contrast = 1.25;
+      context.baseLayer.gamma = 0.85;
 
       scene.globe.enableLighting = true;
       scene.globe.baseColor = cesium.Color.fromCssColorString("#160c33");
 
-      // An atmosphere in the wrong colour, on purpose.
+      // An atmosphere in the wrong colour, on purpose. The sky starts blue at
+      // about hue 0.6, so a small positive shift carries it into violet;
+      // anything near +0.5 wraps past red into yellow.
       configureSky(scene, {
         show: true,
-        hueShift: 0.55,
-        saturationShift: 0.7,
-        brightnessShift: 0.3,
+        hueShift: 0.14,
+        saturationShift: 0.45,
+        brightnessShift: 0.05,
       });
 
       scene.fog.enabled = true;
