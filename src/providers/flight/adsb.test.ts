@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdsbFlightProvider, clearRouteCache } from "./adsb";
 import { FlightError } from "@/lib/flight/errors";
+import { resetMinRequestSpacing, setMinRequestSpacing } from "@/lib/flight/http";
 
 /**
  * Upstream is stubbed at the fetch boundary so these tests exercise the real
@@ -71,11 +72,15 @@ function stubFetch(handler: (url: string) => Response | Promise<Response>) {
 let provider: AdsbFlightProvider;
 
 beforeEach(() => {
+  // Fetch is stubbed throughout this file, so the politeness delay would only
+  // slow the suite down.
+  setMinRequestSpacing(0);
   clearRouteCache();
   provider = new AdsbFlightProvider();
 });
 
 afterEach(() => {
+  resetMinRequestSpacing();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

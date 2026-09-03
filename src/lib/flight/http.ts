@@ -17,21 +17,51 @@ const USER_AGENT =
  * Minimum spacing between requests to any one upstream host.
  *
  * The community ADS-B networks are run on donated hardware and rate-limit on a
- * short sliding window without sending Retry-After. A single user polling one
- * flight is nowhere near any limit, but several concurrent viewers share this
- * server's IP, so their requests are serialised per host to keep our footprint
- * polite. This is a floor on spacing, not a queue with a deadline: requests
- * still resolve in order, just never in a burst.
+ * short sliding window without sending Retry-After. A single viewer polling
+ * one flight makes a request every eight seconds and is nowhere near any
+ * limit, but concurrent viewers share this server's IP, so requests are
+ * serialised per host to keep our footprint polite.
+ *
+ * Measured rather than guessed: at 250ms a burst of about ten requests was
+ * enough to draw a 429 from adsb.fi. A one-second floor is invisible against
+ * an eight-second poll and stays comfortably inside what these feeds accept.
  */
-const MIN_REQUEST_SPACING_MS = 250;
+const DEFAULT_MIN_REQUEST_SPACING_MS = 1_000;
+
+let minRequestSpacingMs = DEFAULT_MIN_REQUEST_SPACING_MS;
+
+/**
+ * Override the spacing floor.
+ *
+ * Exists for tests with a stubbed fetch, which never touch a real upstream and
+ * should not spend a second per request waiting to be polite to nobody. The
+ * live integration tests leave it at the default, since they do.
+ */
+export function setMinRequestSpacing(milliseconds: number): void {
+  minRequestSpacingMs = Math.max(0, milliseconds);
+}
+
+export function resetMinRequestSpacing(): void {
+  minRequestSpacingMs = DEFAULT_MIN_REQUEST_SPACING_MS;
+}
 
 const hostQueues = new Map<string, Promise<void>>();
+
+/**
+ * Requests currently in flight, keyed by URL.
+ *
+ * Two viewers watching the same flight would otherwise each poll upstream for
+ * the same position. Sharing the in-flight promise collapses them into one
+ * request with no staleness whatsoever -- this is deduplication, not caching:
+ * nothing is retained after the response resolves.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
 
 function throttleForHost(host: string): Promise<void> {
   const previous = hostQueues.get(host) ?? Promise.resolve();
 
   const next = previous.then(
-    () => new Promise<void>((resolve) => setTimeout(resolve, MIN_REQUEST_SPACING_MS)),
+    () => new Promise<void>((resolve) => setTimeout(resolve, minRequestSpacingMs)),
   );
 
   // Keep the chain from growing without bound across a long-lived process.
@@ -60,6 +90,25 @@ export type FetchJsonOptions = {
 export async function fetchJson<T>(
   url: string,
   options: FetchJsonOptions = {},
+): Promise<T | null> {
+  // Join an identical request that is already on its way, rather than making
+  // a second one. Caller-specific options (timeout, abort signal) only apply
+  // to the request that actually opens the connection, which is why an
+  // aborted caller never cancels a shared fetch out from under the others.
+  const existing = inFlight.get(url);
+  if (existing) return existing as Promise<T | null>;
+
+  const request = performFetch<T>(url, options).finally(() => {
+    inFlight.delete(url);
+  });
+
+  inFlight.set(url, request);
+  return request;
+}
+
+async function performFetch<T>(
+  url: string,
+  options: FetchJsonOptions,
 ): Promise<T | null> {
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
