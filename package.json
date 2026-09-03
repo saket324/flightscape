@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "copy-cesium": "node scripts/copy-cesium.mjs",
-    "postinstall": "node scripts/copy-cesium.mjs"
+    "postinstall": "node scripts/copy-cesium.mjs",
+    "test:live": "vitest run --config vitest.live.config.mts"
   },
   "dependencies": {
     "cesium": "^1.145.0",
