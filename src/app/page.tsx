@@ -1,69 +1,112 @@
-import Image from "next/image";
+import { FlightSearch } from "@/components/ui/FlightSearch";
 
+/**
+ * The landing page.
+ *
+ * Static and light: no globe here. Cesium is a multi-megabyte download and
+ * loading it before the user has chosen a flight would make the first screen
+ * slow for no benefit. The horizon below is CSS.
+ */
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="relative flex h-full flex-col items-center justify-center overflow-hidden px-6">
+      <Backdrop />
+
+      <div className="animate-rise relative z-10 flex w-full flex-col items-center">
+        <h1 className="font-mono text-3xl font-medium tracking-[0.4em] text-ink sm:text-5xl sm:tracking-[0.5em]">
+          FLIGHTSCAPE
+        </h1>
+
+        <p className="mt-5 text-center text-lg text-ink-muted sm:text-xl">
+          See your journey differently.
+        </p>
+        <p className="mt-2 mb-10 text-center text-sm text-ink-faint">
+          Enter a flight number to watch it live, in three dimensions.
+        </p>
+
+        <FlightSearch />
+      </div>
+
+      <footer className="relative z-10 mt-14 px-4 text-center text-xs text-ink-faint/70">
+        Live positions from the adsb.lol and adsb.fi community networks.
+        <br className="hidden sm:block" /> Route data from adsbdb.
+      </footer>
+    </main>
+  );
+}
+
+/**
+ * A suggested horizon: atmospheric glow above a curved limb.
+ *
+ * Pure CSS so the first paint costs nothing.
+ */
+function Backdrop() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      {/* Atmospheric halo, sitting where the Earth's limb would be. */}
+      <div
+        className="absolute left-1/2 h-[120vmax] w-[120vmax] -translate-x-1/2 rounded-full opacity-70"
+        style={{
+          top: "58vh",
+          background:
+            "radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-signal) 22%, transparent) 0%, color-mix(in srgb, var(--color-signal) 6%, transparent) 28%, transparent 55%)",
+        }}
+      />
+
+      {/* The limb itself. */}
+      <div
+        className="absolute left-1/2 h-[120vmax] w-[120vmax] -translate-x-1/2 rounded-full border-t border-signal/25"
+        style={{
+          top: "60vh",
+          background:
+            "linear-gradient(to bottom, var(--color-abyss) 0%, var(--color-void) 40%)",
+        }}
+      />
+
+      <Stars />
+
+      {/* Vignette, so the type always has something quiet to sit on. */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse at 50% 35%, transparent 30%, color-mix(in srgb, var(--color-void) 75%, transparent) 100%)",
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A fixed star field.
+ *
+ * Positions are hard-coded rather than random so the server and client render
+ * identical markup -- Math.random() here would hydrate mismatched.
+ */
+function Stars() {
+  const stars = [
+    [8, 12, 1], [17, 31, 1], [23, 8, 2], [31, 22, 1], [38, 41, 1],
+    [44, 15, 1], [52, 28, 2], [58, 9, 1], [63, 35, 1], [71, 19, 1],
+    [77, 44, 2], [84, 13, 1], [89, 30, 1], [94, 22, 1], [12, 47, 1],
+    [27, 52, 1], [41, 6, 1], [49, 49, 1], [67, 52, 1], [81, 55, 2],
+    [3, 27, 1], [35, 34, 1], [55, 41, 1], [73, 7, 1], [96, 45, 1],
+  ] as const;
+
+  return (
+    <div className="absolute inset-0">
+      {stars.map(([left, top, size], index) => (
+        <span
+          key={index}
+          className="absolute rounded-full bg-ink"
+          style={{
+            left: `${left}%`,
+            top: `${top}%`,
+            width: size,
+            height: size,
+            opacity: 0.18 + (index % 5) * 0.09,
+          }}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      ))}
     </div>
   );
 }

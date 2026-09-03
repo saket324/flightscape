@@ -1,26 +1,144 @@
 @import "tailwindcss";
 
+/**
+ * Flightscape is a dark product by design: the globe is the light source and
+ * everything else recedes so it can dominate. There is no light theme --
+ * chrome around a night-side Earth would fight the thing it frames.
+ */
+
+@theme {
+  --color-void: #04070d;
+  --color-abyss: #080d17;
+  --color-surface: #0e1524;
+  --color-surface-raised: #141d30;
+  --color-hairline: #1e2a42;
+
+  --color-ink: #f2f6ff;
+  --color-ink-muted: #9aa8c4;
+  --color-ink-faint: #63708c;
+
+  /* Instrument-panel cyan: the live, the current, the aircraft itself. */
+  --color-signal: #4dd0e1;
+  --color-signal-dim: #1e6b78;
+  /* Sodium-vapour amber: delayed data, cities at night. */
+  --color-warn: #ffb454;
+  --color-alert: #ff6b6b;
+  --color-ok: #5ce6a8;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* The globe is the interactive surface; the page itself never scrolls. */
+  overscroll-behavior: none;
+}
+
+/* Numeric readouts must not jitter as digits change. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/**
+ * The live pulse.
+ *
+ * Slow and soft: a heartbeat, not an alarm. Suppressed entirely for viewers
+ * who have asked for reduced motion.
+ */
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+.animate-live {
+  animation: pulse-live 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.animate-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-signal) 22%, transparent),
+    transparent
+  );
+  animation: sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-rise {
+  animation: rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-live,
+  .animate-sweep::after,
+  .animate-rise {
+    animation: none;
+  }
+  .animate-rise {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Cesium injects its own widget chrome; we supply our own controls. */
+.cesium-viewer-bottom,
+.cesium-widget-credits {
+  display: none !important;
+}
+
+.cesium-widget canvas {
+  outline: none;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-signal) 35%, transparent);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
