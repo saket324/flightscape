@@ -5,9 +5,9 @@
  *
  * The split that keeps this smooth:
  *
- *   - The engine is held in a ref. It is mutated by polling and read by the
- *     Cesium render loop sixty times a second, and neither path touches React
- *     state, so nothing here causes a re-render at frame rate.
+ *   - The engine is held outside React state. It is mutated by polling and
+ *     read by the Cesium render loop sixty times a second, and neither path
+ *     causes a re-render.
  *   - React state updates on a slow tick, only for the values a person reads:
  *     altitude, speed, freshness. Those change meaningfully a few times a
  *     second at most.
@@ -41,37 +41,31 @@ export function useFlightEngine(
   flight: Flight | null,
   seedPositions?: readonly FlightPosition[],
 ): FlightEngineState {
-  const engine = useMemo(() => new FlightEngine(), []);
+  const flightId = flight?.id ?? null;
+
+  /**
+   * One engine per flight.
+   *
+   * Keying the engine to the flight id means switching flights produces a
+   * fresh engine rather than needing an effect to reset the old one -- no
+   * chance of the previous aircraft's samples surviving into the new track.
+   */
+  const engine = useMemo(() => {
+    const created = new FlightEngine();
+    if (seedPositions?.length) created.seed(seedPositions);
+    return created;
+    // Seed positions are a one-time bootstrap for this flight; re-seeding on
+    // array identity would discard live samples already collected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flightId]);
 
   const [snapshot, setSnapshot] = useState<FlightSnapshot | null>(null);
-  const [connection, setConnection] = useState<ConnectionState>("idle");
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasEverConnected, setHasEverConnected] = useState(false);
 
-  const flightId = flight?.id ?? null;
-
   // Kept in a ref so the polling effect does not restart when backoff changes.
   const backoffRef = useRef<number>(timing.pollBackoffMinMs);
-
-  const seedKey = useMemo(
-    () => (seedPositions?.length ? seedPositions[0].timestamp : null),
-    [seedPositions],
-  );
-
-  useEffect(() => {
-    engine.reset();
-    setSnapshot(null);
-    setHasEverConnected(false);
-
-    if (seedPositions?.length) {
-      engine.seed(seedPositions);
-      setSnapshot(engine.sample());
-      setHasEverConnected(true);
-    }
-    // seedKey stands in for the seed array's identity; the array itself is
-    // rebuilt on every render by callers and would restart this endlessly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, flightId, seedKey]);
 
   /** One poll. Returns the delay to wait before the next one. */
   const poll = useCallback(
@@ -112,16 +106,11 @@ export function useFlightEngine(
 
   // The polling loop.
   useEffect(() => {
-    if (!flightId) {
-      setConnection("idle");
-      return;
-    }
+    if (!flightId) return;
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
-
-    setConnection("connecting");
 
     const run = async () => {
       if (cancelled) return;
@@ -171,5 +160,13 @@ export function useFlightEngine(
     return () => clearInterval(interval);
   }, [engine, flightId]);
 
-  return { engine, snapshot, connection, errorMessage, hasEverConnected };
+  return {
+    engine,
+    snapshot,
+    // With no flight there is nothing to connect to; derived rather than
+    // stored, so the effect above has no state to write on mount.
+    connection: flightId ? connection : "idle",
+    errorMessage,
+    hasEverConnected,
+  };
 }
