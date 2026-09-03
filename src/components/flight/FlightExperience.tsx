@@ -21,6 +21,7 @@ import {
   type VisualEnvironmentId,
 } from "@/types/visualization";
 import { useFlightEngine } from "@/hooks/useFlightEngine";
+import { useIsNarrowViewport } from "@/hooks/useMediaQuery";
 import { computeProgress, hasArrived } from "@/lib/flight/route";
 import { FlightGlobe } from "@/components/globe/FlightGlobe";
 import { ControlBar } from "@/components/ui/ControlBar";
@@ -48,7 +49,16 @@ export function FlightExperience({ flight }: { flight: Flight }) {
       : "realistic";
   });
 
-  const [panelExpanded, setPanelExpanded] = useState(true);
+  /**
+   * Panel state.
+   *
+   * Null means "not chosen yet", which resolves to collapsed on a phone and
+   * expanded on a wider screen. On a 375px-tall-ish viewport the open panel
+   * covers most of the globe, and the globe is the product.
+   */
+  const isNarrow = useIsNarrowViewport();
+  const [panelChoice, setPanelChoice] = useState<boolean | null>(null);
+  const panelExpanded = panelChoice ?? !isNarrow;
 
   const { engine, snapshot, connection, hasEverConnected } =
     useFlightEngine(flight);
@@ -138,7 +148,7 @@ export function FlightExperience({ flight }: { flight: Flight }) {
           progress={progress}
           indicator={indicator}
           expanded={panelExpanded}
-          onToggle={() => setPanelExpanded((open) => !open)}
+          onToggle={() => setPanelChoice(!panelExpanded)}
         />
 
         <div className="flex min-w-0 flex-col gap-2 sm:items-end">
