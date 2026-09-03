@@ -18,7 +18,10 @@ import type { Flight, RoutePoint } from "@/types/flight";
 import type { CameraMode, VisualEnvironmentId } from "@/types/visualization";
 import type { FlightEngine } from "@/lib/animation/flightEngine";
 import { buildPlannedRoute, splitRouteAtProgress } from "@/lib/flight/route";
-import { progressAlongRoute } from "@/lib/geography/greatCircle";
+import {
+  destinationPoint,
+  progressAlongRoute,
+} from "@/lib/geography/greatCircle";
 import {
   createEnvironment,
   type EnvironmentTheme,
@@ -113,6 +116,12 @@ export class FlightScene {
     this.cameraMode = mode;
     this.cinematicStartedMs = performance.now();
 
+    // From the flight deck you cannot see your own aircraft. Leaving it
+    // visible puts its wings and nose across the middle of the view.
+    if (this.aircraftEntity) {
+      this.aircraftEntity.show = mode !== "cockpit";
+    }
+
     // Global is a one-shot framing of the whole journey rather than a
     // per-frame follow, so it is flown to once on entry.
     if (mode === "global") {
@@ -202,6 +211,9 @@ export class FlightScene {
       id: "aircraft",
       position,
       orientation,
+      // Hidden in cockpit view, including when the page opens straight into it
+      // from a shared URL.
+      show: this.cameraMode !== "cockpit",
       model: {
         uri: "/models/airliner.glb",
         scale: AIRCRAFT_LENGTH_M * this.theme.aircraftScale,
@@ -502,8 +514,26 @@ export class FlightScene {
     if (this.cameraMode === "cockpit") {
       this.releaseCamera();
 
+      const snapshot = this.engine.sample();
+      if (!snapshot) return;
+
+      // Sit the camera at the nose rather than the aircraft's centre. Placed
+      // at the centre it is inside the 60 m model, and the view is the inside
+      // of the fuselage.
+      const nose = destinationPoint(
+        snapshot.position,
+        headingDegrees,
+        AIRCRAFT_LENGTH_M * 0.6,
+      );
+
       camera.setView({
-        destination: aircraft,
+        destination: toCartesian(
+          cesium,
+          nose.latitude,
+          nose.longitude,
+          snapshot.position.altitude,
+          0,
+        ),
         orientation: {
           heading: cesium.Math.toRadians(headingDegrees),
           // A shade below the horizon, the way a flight deck actually sits.
