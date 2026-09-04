@@ -43,3 +43,6 @@ next-env.d.ts
 # flightscape
 !.env.example
 /public/cesium
+
+# local editor/agent tooling
+/.claude
