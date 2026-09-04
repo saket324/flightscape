@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+
+    // Cesium's pre-built Workers, Assets and Widgets are copied into public/
+    // by the postinstall script. They are vendored third-party output rather
+    // than our source, and linting them buries real findings under thousands
+    // of meaningless ones.
+    "public/cesium/**",
   ]),
 ]);
 
