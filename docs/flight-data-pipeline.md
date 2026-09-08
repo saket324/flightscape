@@ -70,13 +70,17 @@ Cartesian3.fromDegrees(longitude, latitude, feet * 0.3048)
 
 ### adsb.fi — `https://opendata.adsb.fi/api/v2`
 
-Same readsb schema and the same fields as adsb.lol. Two differences that
-matter, both of which the code got wrong (see §3.1):
+Same readsb schema, same fields, and — this is the point — the same envelope
+as adsb.lol. The code assumed the two differed, and was wrong on both counts
+(see §3.1):
 
-| Property | adsb.lol | adsb.fi |
-| --- | --- | --- |
-| Aircraft array key | `ac` | **`ac`** (not `aircraft`) |
-| `now` units | milliseconds | **milliseconds** |
+| Property | adsb.lol (actual) | adsb.fi (actual) | adsb.fi (as coded) |
+| --- | --- | --- | --- |
+| Aircraft array key | `ac` | `ac` | `aircraft` ✗ |
+| `now` units | milliseconds | milliseconds | seconds ✗ |
+
+Both mistakes were invented differences. Had the adapter simply been shared,
+neither could have occurred.
 
 ### adsbdb — `https://api.adsbdb.com/v0`
 
