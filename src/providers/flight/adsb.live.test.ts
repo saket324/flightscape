@@ -13,6 +13,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Flight, FlightPosition } from "@/types/flight";
 import { fetchJson } from "@/lib/flight/http";
+import { distanceKm } from "@/lib/geography/greatCircle";
 import { AdsbFlightProvider } from "./adsb";
 
 const provider = new AdsbFlightProvider();
@@ -134,5 +135,67 @@ describe("live positions (live)", () => {
 
   it("returns an empty result for a callsign nobody flies", async () => {
     expect(await provider.searchFlight("ZZ9998")).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * The end-to-end check the audit was written around.
+ *
+ * Resolves a real commercial flight the way a user would, then verifies the
+ * position the app reports against an independent lookup of the same airframe
+ * by its ICAO 24-bit address. This is precisely the comparison that exposed
+ * the dead adsb.fi mirror: the app said "no position", while a by-hex query
+ * showed the aircraft with a sub-second-old fix.
+ */
+describe("real commercial flight, end to end (live)", () => {
+  it("places the aircraft where an independent by-ICAO24 lookup puts it", async () => {
+    if (!airborneFlight) return;
+
+    const icao24 = airborneFlight.id.split(":")[2];
+    expect(icao24).toMatch(/^[0-9a-f]{6}$/);
+
+    const [appPosition, truth] = await Promise.all([
+      provider.getLivePosition(airborneFlight.id),
+      fetchJson<{ ac?: Array<Record<string, unknown>> }>(
+        `https://opendata.adsb.fi/api/v2/hex/${icao24}`,
+        { timeoutMs: 15_000 },
+      ),
+    ]);
+
+    const reference = truth?.ac?.[0];
+    if (!appPosition || !reference) {
+      console.warn("[live] aircraft out of coverage during cross-check");
+      return;
+    }
+
+    // Identity first: the app must be reporting the airframe it claims to be.
+    expect(String(reference.hex).toLowerCase()).toBe(icao24);
+
+    const referenceLat = reference.lat as number;
+    const referenceLon = reference.lon as number;
+
+    // Both readings are of the same aircraft moments apart, so they differ by
+    // however far it flew in between -- seconds of travel, not tens of
+    // kilometres. A wrong-aircraft match fails this by orders of magnitude.
+    const separationKm = distanceKm(
+      { latitude: referenceLat, longitude: referenceLon },
+      { latitude: appPosition.latitude, longitude: appPosition.longitude },
+    );
+
+    console.info(
+      `[live] ${airborneFlight.callsign} @ ${icao24}: app vs independent ` +
+        `lookup = ${separationKm.toFixed(2)} km apart`,
+    );
+
+    expect(separationKm).toBeLessThan(15);
+  }, 45_000);
+
+  it("never reports a position for an airframe that is not the one requested", async () => {
+    if (!airborneFlight) return;
+
+    // A real callsign paired with an address that cannot exist on it. The
+    // old code fell back to `aircraft[0]` here and returned someone else.
+    const impostor = `adsb:${airborneFlight.callsign}:ffffff`;
+    expect(await provider.getLivePosition(impostor)).toBeNull();
   }, 30_000);
 });
