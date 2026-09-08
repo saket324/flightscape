@@ -542,8 +542,27 @@ export class FlightScene {
   private startRenderLoop(): void {
     const listener = () => this.onPreRender();
     this.viewer.scene.preRender.addEventListener(listener);
-    this.removePreRender = () =>
+
+    /**
+     * The frame snapshot is valid only for the frame that computed it.
+     *
+     * Without this the value set in preRender would persist indefinitely, and
+     * any property read outside a render pass -- Cesium does this for
+     * flyTo/zoomTo and entity availability, and it happens whenever the
+     * browser suspends the render loop for a hidden tab -- would silently
+     * return a stale position. Clearing it here makes `currentSnapshot()`
+     * fall through to a fresh `engine.sample()` off-frame, which is the whole
+     * point of that fallback.
+     */
+    const clear = () => {
+      this.frameSnapshot = null;
+    };
+    this.viewer.scene.postRender.addEventListener(clear);
+
+    this.removePreRender = () => {
       this.viewer.scene.preRender.removeEventListener(listener);
+      this.viewer.scene.postRender.removeEventListener(clear);
+    };
 
     this.lastFrameMs = performance.now();
     this.cinematicStartedMs = this.lastFrameMs;
