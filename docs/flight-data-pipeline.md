@@ -244,3 +244,58 @@ and matter more as a flight progresses:
 - The trace captured one flight in one region at one moment. The feed
   behaviour in §3.2 is a snapshot of that window, though the adapter bugs in
   §3.1 are unconditional and independent of load.
+
+---
+
+## 6. Outcome
+
+### Fixes
+
+| # | Change | Effect |
+| --- | --- | --- |
+| 1 | One shared feed unwrap that probes for `ac`/`aircraft` and detects the clock unit by magnitude | Revives the adsb.fi mirror, which had never returned an aircraft |
+| 2 | Positions polled by `/hex/{icao24}`, accepting only that airframe | Identity pinned to the metal; no substitution possible |
+| 3 | `?? aircraft[0]` removed from `getLivePosition` and `getFlightDetails` | A missing airframe now yields null, not another aircraft |
+| 4 | Callsign-only lookups require an exact transmitted-callsign match | No loose matching when no airframe is pinned |
+| 5 | adsbdb route attached only when its callsign matches the aircraft found | One flight's schedule cannot caption another's position |
+| 6 | `history.replaceState` instead of `router.replace` for URL sync | 5 RSC page fetches per visit → 1 |
+| 7 | One `engine.sample()` per frame instead of 5–6 | Same interpolation no longer recomputed per consumer |
+| 8 | Track polyline cached against an engine track version | Polyline geometry no longer re-uploaded 60×/s |
+| 9 | Adaptive quality governor (HDR → MSAA → resolution) | Quality reduced only on devices that miss the frame budget |
+| 10 | Frame snapshot cleared in `postRender` | Off-frame property reads get a fresh sample, not a stale one |
+| 11 | Freshness ladder gains `recent` and `derived`; `PositionConfidence` on every snapshot | A dead-reckoned position can no longer be labelled LIVE |
+
+### Verification
+
+End-to-end on real commercial flights, comparing the app against an
+independent by-ICAO24 lookup of the same airframe:
+
+```
+Before   LS59N  / EXS59N / 4070ed   app: position: null      (aircraft visible upstream, fix 0.1s old)
+After    BA830D / BAW830D / 4009c5  app vs independent: 0.33 km
+After    TS123  / TSC123 / c06e45   app vs independent: 0.00 km   (live integration test)
+After    TS123  3D scene vs app API: 0.26 km
+```
+
+Each residual is the distance the aircraft covered between the two
+measurements, not error.
+
+Request volume for one visit plus three control changes: **1** page fetch
+(was 5 for a bare visit), position polling steady at ~8 s.
+
+### Still open
+
+- **Wall-clock FPS on the user's display is still unmeasured.** The preview
+  pane suspends `requestAnimationFrame`, so the governor's real behaviour on
+  the reporting machine is unverified. It logs its decisions to the console
+  (`[flightscape] render quality -> …`) and `FlightScene.getQualityStats()`
+  reports the measured median frame time; those are the numbers to read on the
+  affected hardware.
+- **adsb.lol rate limiting is worked around, not solved.** Two mirrors with
+  failover is what keeps positions flowing; sustained throttling on both would
+  still produce gaps, now surfaced honestly as ESTIMATED then DELAYED.
+- **No schedule times.** adsbdb supplies routes, not timetables, so departure
+  and arrival times remain null and arrival is derived geometrically from live
+  ground speed.
+- **Track history is per-session.** A page reload starts the observed track
+  again from empty; nothing persists a flown path.
