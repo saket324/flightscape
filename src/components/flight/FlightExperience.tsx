@@ -11,7 +11,7 @@
  * and restored: /flight/adsb:ACA103:c02f41?camera=cinematic&environment=night
  */
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { Flight, FlightProgress } from "@/types/flight";
 import {
@@ -32,7 +32,6 @@ const CAMERA_IDS = new Set(CAMERA_MODES.map((mode) => mode.id));
 const ENVIRONMENT_IDS = new Set(VISUAL_ENVIRONMENTS.map((env) => env.id));
 
 export function FlightExperience({ flight }: { flight: Flight }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [cameraMode, setCameraMode] = useState<CameraMode>(() => {
@@ -81,10 +80,23 @@ export function FlightExperience({ flight }: { flight: Flight }) {
     );
   }, [snapshot, flight.origin, flight.destination]);
 
-  // Keep the URL in step with the controls, without adding history entries --
-  // flipping through six environments should not mean six taps of Back.
+  /**
+   * Keep the URL in step with the controls.
+   *
+   * Deliberately `history.replaceState` rather than `router.replace`. The
+   * router treats a query change as a navigation and refetches the route's
+   * RSC payload, which re-runs `getFlightDetails` on the server: the audit
+   * measured five `/flight/[id]` fetches for a single visit, each one an
+   * extra round of upstream API calls feeding the rate limiting that broke
+   * live positions.
+   *
+   * Nothing here reads the query string after mount -- camera and environment
+   * live in React state -- so the URL only needs to be correct for copying
+   * and sharing. Rewriting it in place does that without a navigation, and
+   * without adding a history entry per control press.
+   */
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(window.location.search);
 
     if (cameraMode === "regional") params.delete("camera");
     else params.set("camera", cameraMode);
@@ -93,13 +105,12 @@ export function FlightExperience({ flight }: { flight: Flight }) {
     else params.set("environment", environment);
 
     const query = params.toString();
-    router.replace(query ? `?${query}` : window.location.pathname, {
-      scroll: false,
-    });
-    // searchParams is intentionally omitted: including it would re-run this
-    // effect from its own replace() and loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraMode, environment, router]);
+    const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
+
+    if (next !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [cameraMode, environment]);
 
   const indicator = useMemo<IndicatorState>(() => {
     if (!flight.source.live) return { kind: "demo" };

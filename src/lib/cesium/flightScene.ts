@@ -29,6 +29,7 @@ import {
 } from "@/components/environments";
 import type { CesiumModule } from "./bootstrap";
 import { dampFraming, framingFor, type CameraFraming } from "./cameras";
+import { QualityGovernor, type QualityTier } from "./performance";
 import { aircraftOrientation, toCartesian } from "./scene";
 
 type Cesium = CesiumModule;
@@ -74,8 +75,31 @@ export class FlightScene {
   private cinematicStartedMs = 0;
   private removePreRender: (() => void) | null = null;
 
+  /** Watches real frame times and trims quality only on devices that need it. */
+  private readonly quality: QualityGovernor;
+  /** Baseline resolution scale, so tier multipliers stay relative to it. */
+  private baseResolutionScale = 1;
+
   /** Reused per frame so the render loop allocates nothing. */
   private scratchPosition: InstanceType<Cesium["Cartesian3"]>;
+
+  /**
+   * The snapshot for the frame currently being drawn.
+   *
+   * Cesium pulls position, orientation and both route polylines through
+   * separate callback properties, and the camera and environment need the
+   * same state again. Each of those used to call `engine.sample()` for
+   * itself -- five or six interpolations per frame, all for the same instant,
+   * all necessarily identical. `onPreRender` runs before the callbacks, so it
+   * computes once and everything else reads this.
+   */
+  private frameSnapshot: ReturnType<FlightEngine["sample"]> = null;
+
+  /** Scene-space track geometry, rebuilt only when the track itself changes. */
+  private trackCache: {
+    version: number;
+    positions: InstanceType<Cesium["Cartesian3"]>[];
+  } | null = null;
   private routeSplitCache: {
     fraction: number;
     completed: InstanceType<Cesium["Cartesian3"]>[];
@@ -99,6 +123,10 @@ export class FlightScene {
     this.cameraMode = options.cameraMode;
 
     this.scratchPosition = new this.cesium.Cartesian3();
+    this.baseResolutionScale = this.viewer.resolutionScale;
+    this.quality = new QualityGovernor({
+      onChange: (tier) => this.applyQualityTier(tier),
+    });
 
     this.environment = createEnvironment(options.environment);
     this.theme = this.environment.theme;
@@ -165,6 +193,48 @@ export class FlightScene {
     }
   }
 
+  /**
+   * The engine state for this frame.
+   *
+   * Falls back to sampling directly when called outside a render pass, so the
+   * entity callbacks remain correct if Cesium evaluates them off-cycle.
+   */
+  private currentSnapshot(): ReturnType<FlightEngine["sample"]> {
+    return this.frameSnapshot ?? this.engine.sample();
+  }
+
+  /** Current render quality, for diagnostics. */
+  getQualityStats(): {
+    medianFrameMs: number;
+    level: number;
+    windows: number;
+    label: string;
+  } {
+    return { ...this.quality.stats, label: this.quality.currentTier.label };
+  }
+
+  /**
+   * Apply a quality tier to the live scene.
+   *
+   * Only the settings that actually cost measurable frame time are touched.
+   * Terrain and imagery detail are left alone: they are the geography the
+   * product exists to show, and blurring the world to gain frames would
+   * defeat the point.
+   */
+  private applyQualityTier(tier: QualityTier): void {
+    if (this.viewer.isDestroyed()) return;
+
+    const { scene } = this.viewer;
+
+    scene.highDynamicRange = tier.hdr && scene.highDynamicRangeSupported;
+    scene.msaaSamples = tier.msaaSamples;
+    this.viewer.resolutionScale = this.baseResolutionScale * tier.resolutionScale;
+
+    console.info(
+      `[flightscape] render quality -> ${tier.label} (median frame ${this.quality.stats.medianFrameMs.toFixed(1)}ms)`,
+    );
+  }
+
   // --- entities ------------------------------------------------------------
 
   private buildEntities(): void {
@@ -174,7 +244,7 @@ export class FlightScene {
     // per frame straight from the engine, so there is no React state, no
     // setInterval and no copy of the position living anywhere else.
     const position = new cesium.CallbackPositionProperty(() => {
-      const snapshot = this.engine.sample();
+      const snapshot = this.currentSnapshot();
       if (!snapshot) return undefined;
 
       return toCartesian(
@@ -186,7 +256,7 @@ export class FlightScene {
     }, false);
 
     const orientation = new cesium.CallbackProperty(() => {
-      const snapshot = this.engine.sample();
+      const snapshot = this.currentSnapshot();
       if (!snapshot) return undefined;
 
       const cartesian = toCartesian(
@@ -293,7 +363,7 @@ export class FlightScene {
    * percent, which at cruise is a few seconds apart.
    */
   private currentRouteSplit(points: RoutePoint[]) {
-    const snapshot = this.engine.sample();
+    const snapshot = this.currentSnapshot();
     const { origin, destination } = this.flight;
     if (!snapshot || !origin || !destination) return this.routeSplitCache;
 
@@ -334,11 +404,28 @@ export class FlightScene {
     this.trackEntity = viewer.entities.add({
       id: "observed-track",
       polyline: {
+        /**
+         * Cached against the engine's track version.
+         *
+         * This callback runs every frame. Rebuilding the array meant a fresh
+         * Cartesian3 per point and a new array identity each time, so Cesium
+         * re-uploaded the whole polyline geometry to the GPU sixty times a
+         * second for data that changes once every few seconds. The retention
+         * cap is 900 points, so the waste grows with the length of the flight.
+         *
+         * Returning the same array instance while the version is unchanged
+         * lets Cesium skip the rebuild entirely.
+         */
         positions: new cesium.CallbackProperty(() => {
-          const track = this.engine.getTrack();
-          if (track.length < 2) return undefined;
+          const version = this.engine.getTrackVersion();
+          if (this.trackCache?.version === version) {
+            return this.trackCache.positions.length >= 2
+              ? this.trackCache.positions
+              : undefined;
+          }
 
-          return track.map((point) =>
+          const track = this.engine.getTrack();
+          const positions = track.map((point) =>
             toCartesian(
               cesium,
               point.latitude,
@@ -347,6 +434,9 @@ export class FlightScene {
               0,
             ),
           );
+
+          this.trackCache = { version, positions };
+          return positions.length >= 2 ? positions : undefined;
         }, false),
         width: 2.5,
         arcType: cesium.ArcType.NONE,
@@ -467,10 +557,15 @@ export class FlightScene {
    */
   private onPreRender(): void {
     const now = performance.now();
-    const deltaSeconds = Math.min(0.25, (now - this.lastFrameMs) / 1000);
+    const deltaMs = now - this.lastFrameMs;
+    const deltaSeconds = Math.min(0.25, deltaMs / 1000);
     this.lastFrameMs = now;
 
-    const snapshot = this.engine.sample();
+    this.quality.recordFrame(deltaMs);
+
+    // One sample for the whole frame; every callback below reads it.
+    this.frameSnapshot = this.engine.sample();
+    const snapshot = this.frameSnapshot;
     if (!snapshot) return;
 
     const { cesium } = this;
@@ -514,7 +609,7 @@ export class FlightScene {
     if (this.cameraMode === "cockpit") {
       this.releaseCamera();
 
-      const snapshot = this.engine.sample();
+      const snapshot = this.currentSnapshot();
       if (!snapshot) return;
 
       // Sit the camera at the nose rather than the aircraft's centre. Placed

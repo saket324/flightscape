@@ -54,6 +54,15 @@ export function freshnessFor(ageSeconds: number): FreshnessLevel {
 export class FlightEngine {
   private samples: FlightPosition[] = [];
   private track: RoutePoint[] = [];
+
+  /**
+   * Bumped whenever the track changes.
+   *
+   * The renderer converts the whole track to scene coordinates, which it must
+   * not redo every frame for data that changes every few seconds. Comparing a
+   * counter is how it knows whether its cached geometry is still good.
+   */
+  private trackVersion = 0;
   private listeners = new Set<Listener>();
 
   /**
@@ -151,6 +160,11 @@ export class FlightEngine {
     return this.track;
   }
 
+  /** Changes whenever getTrack() would return something different. */
+  getTrackVersion(): number {
+    return this.trackVersion;
+  }
+
   /** The newest observed position, or null before the first poll. */
   getLastObserved(): FlightPosition | null {
     return this.samples[this.samples.length - 1] ?? null;
@@ -166,6 +180,7 @@ export class FlightEngine {
   reset(): void {
     this.samples = [];
     this.track = [];
+    this.trackVersion += 1;
     this.clockOffsetMs = 0;
   }
 
@@ -196,6 +211,7 @@ export class FlightEngine {
       return;
     }
 
+    this.trackVersion += 1;
     this.track.push({
       latitude: position.latitude,
       longitude: position.longitude,
