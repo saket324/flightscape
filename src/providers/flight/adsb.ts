@@ -57,42 +57,74 @@ const SOURCE: DataSource = {
 type PositionFeed = {
   name: string;
   callsignUrl: (callsign: string) => string;
-  /** Pull the aircraft list and the feed's own clock out of the envelope. */
-  unwrap: (payload: unknown) => { aircraft: AdsbLolAircraft[]; nowMs: number };
+  /** Look an airframe up by its ICAO 24-bit address. */
+  hexUrl: (icao24: string) => string;
 };
 
 const FEEDS: readonly PositionFeed[] = [
   {
-    name: "adsb.lol",
-    callsignUrl: (callsign) =>
-      `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign)}`,
-    unwrap: (payload) => {
-      const body = payload as { ac?: AdsbLolAircraft[] | null; now?: unknown };
-      // adsb.lol reports `now` in milliseconds.
-      return {
-        aircraft: body?.ac ?? [],
-        nowMs: finiteOrNull(body?.now) ?? Date.now(),
-      };
-    },
-  },
-  {
     name: "adsb.fi",
     callsignUrl: (callsign) =>
       `https://opendata.adsb.fi/api/v2/callsign/${encodeURIComponent(callsign)}`,
-    unwrap: (payload) => {
-      const body = payload as {
-        aircraft?: AdsbLolAircraft[] | null;
-        now?: unknown;
-      };
-      // adsb.fi reports `now` in seconds; normalise to milliseconds.
-      const seconds = finiteOrNull(body?.now);
-      return {
-        aircraft: body?.aircraft ?? [],
-        nowMs: seconds === null ? Date.now() : seconds * 1000,
-      };
-    },
+    hexUrl: (icao24) =>
+      `https://opendata.adsb.fi/api/v2/hex/${encodeURIComponent(icao24)}`,
+  },
+  {
+    name: "adsb.lol",
+    callsignUrl: (callsign) =>
+      `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign)}`,
+    hexUrl: (icao24) =>
+      `https://api.adsb.lol/v2/hex/${encodeURIComponent(icao24)}`,
   },
 ];
+
+/**
+ * Pull the aircraft list and the feed's clock out of a readsb envelope.
+ *
+ * Deliberately one shared function rather than a per-feed adapter. The
+ * per-feed version silently disabled the adsb.fi mirror for its entire
+ * existence: it read `body.aircraft` where the feed returns `ac`, so it
+ * always saw zero aircraft and simply reported "not found". A missing key
+ * that yields an empty list is invisible -- there is no error, just an
+ * aircraft that quietly stops existing -- so the shape is now probed rather
+ * than assumed.
+ *
+ * `now` is likewise detected rather than assumed. Both feeds currently report
+ * milliseconds, but the same class of mistake (multiplying a millisecond
+ * clock by 1000) pushes every timestamp into the far future, where
+ * sanitizeTimestamp rejects it and every position becomes null.
+ */
+export function unwrapFeed(payload: unknown): {
+  aircraft: AdsbLolAircraft[];
+  nowMs: number;
+} {
+  const body = payload as {
+    ac?: unknown;
+    aircraft?: unknown;
+    now?: unknown;
+  } | null;
+
+  const list = [body?.ac, body?.aircraft].find(Array.isArray) as
+    | AdsbLolAircraft[]
+    | undefined;
+
+  return {
+    aircraft: list ?? [],
+    nowMs: normalizeFeedClock(body?.now),
+  };
+}
+
+/**
+ * A feed clock in milliseconds.
+ *
+ * Unix seconds are ~1.8e9 and milliseconds ~1.8e12, so the magnitude
+ * distinguishes them unambiguously for any date this software will see.
+ */
+export function normalizeFeedClock(value: unknown, now = Date.now()): number {
+  const parsed = finiteOrNull(value);
+  if (parsed === null || parsed <= 0) return now;
+  return parsed > 1e11 ? parsed : parsed * 1000;
+}
 
 /** Route reference data is static; an hour is comfortably conservative. */
 const routeCache = new TtlCache<AdsbdbRoute | null>(60 * 60 * 1000, 400);
@@ -159,6 +191,19 @@ type AdsbdbResponse = {
 };
 
 // --- Normalisation ----------------------------------------------------------
+
+/**
+ * The callsign an aircraft is actually transmitting.
+ *
+ * Feeds space-pad the field ("EXS59N  "), so it has to be trimmed before any
+ * comparison. Used for identity checks, where a loose match would let one
+ * flight's data be shown under another's name.
+ */
+export function normalizeTransmittedCallsign(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.replace(/\s+/g, "").toUpperCase()
+    : null;
+}
 
 const asString = (value: unknown): string | null =>
   typeof value === "string" && value.trim() !== "" ? value.trim() : null;
@@ -258,15 +303,16 @@ async function fetchRoute(callsign: string): Promise<AdsbdbRoute | null> {
  *
  * An error is surfaced only if no mirror produced anything at all.
  */
-async function fetchAircraftByCallsign(
-  callsign: string,
+async function fetchFromFeeds(
+  url: (feed: PositionFeed) => string,
+  label: string,
 ): Promise<{ aircraft: AdsbLolAircraft[]; nowMs: number }> {
   let lastError: unknown = null;
   let sawHealthyFeed = false;
 
   for (const feed of FEEDS) {
     try {
-      const payload = await fetchJson<unknown>(feed.callsignUrl(callsign), {
+      const payload = await fetchJson<unknown>(url(feed), {
         allowNotFound: true,
         timeoutMs: 8_000,
       });
@@ -274,12 +320,12 @@ async function fetchAircraftByCallsign(
       sawHealthyFeed = true;
       if (payload === null) continue;
 
-      const result = feed.unwrap(payload);
+      const result = unwrapFeed(payload);
       if (result.aircraft.length > 0) return result;
     } catch (error) {
       lastError = error;
       console.warn(
-        `[adsb] ${feed.name} unavailable for ${callsign}; trying next mirror`,
+        `[adsb] ${feed.name} unavailable for ${label}; trying next mirror`,
       );
     }
   }
@@ -289,6 +335,21 @@ async function fetchAircraftByCallsign(
 
   throw lastError ?? new FlightError("provider_unavailable");
 }
+
+const fetchAircraftByCallsign = (callsign: string) =>
+  fetchFromFeeds((feed) => feed.callsignUrl(callsign), callsign);
+
+/**
+ * Look up one airframe by its ICAO 24-bit address.
+ *
+ * This is the right key for tracking a flight once identity is established.
+ * A callsign says what a flight is *called* -- it is reassigned between
+ * rotations, can be shared by two airframes around a turnaround, and is
+ * whatever the crew typed into the box. The ICAO24 address is burned into the
+ * transponder and identifies the metal.
+ */
+const fetchAircraftByHex = (icao24: string) =>
+  fetchFromFeeds((feed) => feed.hexUrl(icao24), icao24);
 
 // --- Provider ---------------------------------------------------------------
 
@@ -343,43 +404,64 @@ export class AdsbFlightProvider implements FlightDataProvider {
     return [];
   }
 
+  /**
+   * The aircraft's current position, or null.
+   *
+   * Identity is pinned to the airframe. When the id carries an ICAO24 we ask
+   * the feeds for that address directly and accept nothing else: if that
+   * airframe is not being received, the honest answer is null.
+   *
+   * The previous implementation queried by callsign and, when the pinned hex
+   * was absent from the response, fell back to `aircraft[0]` -- returning some
+   * other aircraft's coordinates under this flight's identity. That is the one
+   * failure this product cannot have, so there is no fallback here at all.
+   */
   async getLivePosition(flightId: string): Promise<FlightPosition | null> {
+    const hex = this.hexFromId(flightId);
+
+    if (hex) {
+      const { aircraft, nowMs } = await fetchAircraftByHex(hex);
+      const match = aircraft.find(
+        (entry) => asString(entry.hex)?.toLowerCase() === hex,
+      );
+      return match ? toPosition(match, nowMs) : null;
+    }
+
+    // No airframe pinned yet (a route-only flight). Fall back to the callsign,
+    // and accept a record only if it really is transmitting that callsign.
     const callsign = this.callsignFromId(flightId);
     if (!callsign) throw new FlightError("invalid_identifier");
 
     const { aircraft, nowMs } = await fetchAircraftByCallsign(callsign);
-    if (aircraft.length === 0) return null;
+    const match = aircraft.find(
+      (entry) => normalizeTransmittedCallsign(entry.flight) === callsign,
+    );
 
-    const hex = this.hexFromId(flightId);
-
-    // Pin to the specific airframe when the id carries one, so a second
-    // aircraft appearing under the same callsign cannot hijack the track.
-    const match =
-      (hex
-        ? aircraft.find((entry) => asString(entry.hex)?.toLowerCase() === hex)
-        : undefined) ?? aircraft[0];
-
-    return toPosition(match, nowMs);
+    return match ? toPosition(match, nowMs) : null;
   }
 
   async getFlightDetails(flightId: string): Promise<Flight | null> {
     const callsign = this.callsignFromId(flightId);
     if (!callsign) throw new FlightError("invalid_identifier");
 
+    const hex = this.hexFromId(flightId);
+
     const [route, feed] = await Promise.all([
       fetchRoute(callsign).catch(() => null),
-      fetchAircraftByCallsign(callsign).catch(() => ({
-        aircraft: [] as AdsbLolAircraft[],
-        nowMs: Date.now(),
-      })),
+      // Same identity rule as getLivePosition: ask for the airframe by
+      // address when we know it, and never settle for a different one.
+      (hex ? fetchAircraftByHex(hex) : fetchAircraftByCallsign(callsign)).catch(
+        () => ({ aircraft: [] as AdsbLolAircraft[], nowMs: Date.now() }),
+      ),
     ]);
 
-    const hex = this.hexFromId(flightId);
     const match = hex
       ? feed.aircraft.find(
           (entry) => asString(entry.hex)?.toLowerCase() === hex,
         )
-      : feed.aircraft[0];
+      : feed.aircraft.find(
+          (entry) => normalizeTransmittedCallsign(entry.flight) === callsign,
+        );
 
     if (match) {
       const flight = this.toFlight(match, feed.nowMs, route, callsign);
@@ -419,18 +501,33 @@ export class AdsbFlightProvider implements FlightDataProvider {
     fallbackCallsign: string,
   ): Flight | null {
     const callsign =
-      asString(aircraft.flight)?.replace(/\s+/g, "") ?? fallbackCallsign;
+      normalizeTransmittedCallsign(aircraft.flight) ?? fallbackCallsign;
     const hex = asString(aircraft.hex)?.toLowerCase() ?? null;
     const position = toPosition(aircraft, nowMs);
+
+    /**
+     * Only attach route data that belongs to this aircraft.
+     *
+     * Search resolves a route from one callsign candidate but may find the
+     * aircraft under a different one. Attaching the route regardless would
+     * label a real aircraft with another flight's origin and destination --
+     * the map would be right and the caption wrong, which is arguably worse
+     * than showing nothing.
+     */
+    const routeCallsign =
+      normalizeTransmittedCallsign(route?.callsign_icao) ??
+      normalizeTransmittedCallsign(route?.callsign);
+    const routeMatches = routeCallsign !== null && routeCallsign === callsign;
+    const verifiedRoute = routeMatches ? route : null;
 
     return {
       id: this.buildId(callsign, hex),
       callsign,
       flightNumber:
-        asString(route?.callsign_iata) ?? displayFlightNumber(callsign),
-      airline: toAirline(route?.airline),
-      origin: toAirport(route?.origin),
-      destination: toAirport(route?.destination),
+        asString(verifiedRoute?.callsign_iata) ?? displayFlightNumber(callsign),
+      airline: toAirline(verifiedRoute?.airline),
+      origin: toAirport(verifiedRoute?.origin),
+      destination: toAirport(verifiedRoute?.destination),
       status: statusFor(position),
       aircraftType: asString(aircraft.t),
       registration: asString(aircraft.r),
