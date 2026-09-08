@@ -47,8 +47,9 @@ const setClock = (ms: number): void => {
 describe("freshnessFor", () => {
   it("grades data age against the configured thresholds", () => {
     expect(freshnessFor(0)).toBe("live");
-    expect(freshnessFor(timing.delayedAfterSeconds - 1)).toBe("live");
-    expect(freshnessFor(timing.delayedAfterSeconds)).toBe("delayed");
+    expect(freshnessFor(timing.recentAfterSeconds - 1)).toBe("live");
+    expect(freshnessFor(timing.recentAfterSeconds)).toBe("recent");
+    expect(freshnessFor(timing.derivedAfterSeconds)).toBe("derived");
     expect(freshnessFor(timing.staleAfterSeconds)).toBe("stale");
     expect(freshnessFor(timing.unavailableAfterSeconds)).toBe("unavailable");
   });
@@ -96,7 +97,7 @@ describe("FlightEngine.ingest", () => {
     // The last known fix stands, and its age is what the UI must report.
     const snapshot = engine.sample(BASE_MS + 40_000)!;
     expect(snapshot.dataAgeSeconds).toBeCloseTo(40, 0);
-    expect(snapshot.freshness).toBe("delayed");
+    expect(snapshot.freshness).toBe("derived");
     expect(snapshot.lastObserved.timestamp).toBe(at(0));
   });
 
@@ -144,7 +145,7 @@ describe("FlightEngine clock synchronisation", () => {
     // Forty seconds later on the browser's own clock.
     const snapshot = engine.sample(clientNow + 40_000)!;
     expect(snapshot.dataAgeSeconds).toBeCloseTo(40, 0);
-    expect(snapshot.freshness).toBe("delayed");
+    expect(snapshot.freshness).toBe("derived");
   });
 });
 
@@ -259,5 +260,57 @@ describe("FlightEngine.seed and subscribers", () => {
 
     expect(engine.sample(BASE_MS)).toBeNull();
     expect(engine.getTrack()).toHaveLength(0);
+  });
+});
+
+describe("position confidence", () => {
+  const engine = () => {
+    const created = new FlightEngine();
+    created.setSource("adsb.fi");
+    return created;
+  };
+
+  it("marks a position observed when no projection was needed", () => {
+    const created = engine();
+    created.ingest(position({ timestamp: at(0) }), at(0));
+
+    // Move the browser clock in step with the server's, so the engine's
+    // offset is zero and `sample` means what the argument says.
+    setClock(BASE_MS + 10_000);
+    created.ingest(position({ timestamp: at(10), latitude: 43.6 }), at(10));
+
+    // Sampling between two real fixes is interpolation, not projection.
+    const snapshot = created.sample(BASE_MS + 5_000)!;
+    expect(snapshot.confidence.observed).toBe(true);
+    expect(snapshot.confidence.level).toBe("live");
+  });
+
+  it("marks a dead-reckoned position as not observed", () => {
+    const created = engine();
+    created.ingest(position({ timestamp: at(0) }), at(0));
+
+    const snapshot = created.sample(BASE_MS + 40_000)!;
+    expect(snapshot.confidence.observed).toBe(false);
+    expect(snapshot.confidence.level).toBe("derived");
+  });
+
+  it("reports the source and the age of the underlying observation", () => {
+    const created = engine();
+    created.ingest(position({ timestamp: at(0) }), at(0));
+
+    const snapshot = created.sample(BASE_MS + 20_000)!;
+    expect(snapshot.confidence.source).toBe("adsb.fi");
+    expect(snapshot.confidence.observedAt).toBe(at(0));
+    expect(snapshot.confidence.ageSeconds).toBeCloseTo(20, 0);
+  });
+
+  it("keeps confidence and freshness in step", () => {
+    const created = engine();
+    created.ingest(position({ timestamp: at(0) }), at(0));
+
+    for (const offset of [0, 15_000, 40_000, 120_000, 400_000]) {
+      const snapshot = created.sample(BASE_MS + offset)!;
+      expect(snapshot.confidence.level).toBe(snapshot.freshness);
+    }
   });
 });

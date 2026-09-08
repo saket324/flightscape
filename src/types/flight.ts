@@ -94,7 +94,46 @@ export type FlightPosition = {
 };
 
 /** How fresh the live feed is, as judged against the newest sample. */
-export type FreshnessLevel = "live" | "delayed" | "stale" | "unavailable";
+/**
+ * How much to trust the position currently on screen.
+ *
+ * A ladder, not a boolean, because the honest answer degrades gradually. The
+ * distinction that matters most is `derived`: feeds always lag reality by a
+ * few seconds, so the rendered position is dead-reckoned forward from the last
+ * real observation. While that projection is short it is indistinguishable
+ * from an observation; once it stretches, the viewer deserves to know they are
+ * looking at an estimate rather than a report.
+ *
+ *   live         observed moments ago
+ *   recent       observed, ageing, projection still small
+ *   derived      materially dead-reckoned from the last observation
+ *   stale        past the projection cap; the aircraft is held in place
+ *   unavailable  too old to present as the aircraft's whereabouts
+ */
+export type FreshnessLevel =
+  | "live"
+  | "recent"
+  | "derived"
+  | "stale"
+  | "unavailable";
+
+/**
+ * Provenance for a rendered position.
+ *
+ * Carried alongside the position so the interface cannot present an estimate
+ * as an observation by accident.
+ */
+export type PositionConfidence = {
+  /** Which provider observed it. */
+  source: string;
+  /** When the underlying observation was actually made. */
+  observedAt: string;
+  /** Seconds between that observation and now, on the server clock. */
+  ageSeconds: number;
+  /** False when the coordinates were dead-reckoned rather than reported. */
+  observed: boolean;
+  level: FreshnessLevel;
+};
 
 export type FlightState = {
   flight: Flight;

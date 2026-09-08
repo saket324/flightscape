@@ -108,8 +108,12 @@ export function freshnessLabel(
   switch (freshness) {
     case "live":
       return "LIVE";
-    case "delayed":
-      return "DELAYED";
+    case "recent":
+      return "RECENT";
+    case "derived":
+      // The aircraft is where our projection says, not where a receiver last
+      // saw it. Saying "LIVE" here would be the product's central lie.
+      return "ESTIMATED";
     case "stale":
       return "DELAYED";
     case "unavailable":

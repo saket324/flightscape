@@ -52,6 +52,9 @@ export function useFlightEngine(
    */
   const engine = useMemo(() => {
     const created = new FlightEngine();
+    // Provenance travels with every snapshot, so the UI can always say where
+    // a position came from without consulting the flight object again.
+    if (flight) created.setSource(flight.source.providerName);
     if (seedPositions?.length) created.seed(seedPositions);
     return created;
     // Seed positions are a one-time bootstrap for this flight; re-seeding on

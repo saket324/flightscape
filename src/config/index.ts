@@ -34,8 +34,10 @@ export const timing = {
   /** Backoff applied after a failed poll, doubling up to the cap. */
   pollBackoffMinMs: 8_000,
   pollBackoffMaxMs: 60_000,
-  /** Data older than this is shown as DELAYED rather than LIVE. */
-  delayedAfterSeconds: 30,
+  /** Beyond this the feed is ageing, though still recently observed. */
+  recentAfterSeconds: 12,
+  /** Beyond this the position on screen is materially dead-reckoned. */
+  derivedAfterSeconds: 30,
   /** Data older than this is shown as STALE. */
   staleAfterSeconds: 90,
   /** Beyond this we stop claiming to know where the aircraft is. */

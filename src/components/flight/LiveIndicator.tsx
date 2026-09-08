@@ -8,8 +8,9 @@
  * whether the source is live at all, and how old its newest observation is --
  * and it degrades honestly through both.
  *
- *   LIVE       real source, fresh data
- *   DELAYED    real source, data ageing
+ *   LIVE       real source, observed within the last few seconds
+ *   ESTIMATED  real source, position dead-reckoned from an ageing fix
+ *   DELAYED    real source, past the projection cap and held in place
  *   NO SIGNAL  real source, nothing recent enough to trust
  *   DEMO       simulated source, whatever its age
  *   LANDED     the flight is over
@@ -32,6 +33,12 @@ const STYLES: Record<
     text: "text-ok",
     ring: "bg-ok/15 border-ok/30",
     pulse: true,
+  },
+  recent: {
+    dot: "bg-ok",
+    text: "text-ok",
+    ring: "bg-ok/15 border-ok/30",
+    pulse: false,
   },
   delayed: {
     dot: "bg-warn",
@@ -98,11 +105,30 @@ function describe(state: IndicatorState): {
         };
       }
 
-      if (state.freshness === "delayed" || state.freshness === "stale") {
+      if (state.freshness === "stale") {
         return {
           label: "DELAYED",
           detail: `Updated ${formatDataAge(state.ageSeconds)}`,
           style: STYLES.delayed,
+        };
+      }
+
+      // Beyond this age the aircraft on screen is where dead reckoning puts
+      // it, not where a receiver last saw it. Calling that LIVE would be the
+      // one claim this product must never make loosely.
+      if (state.freshness === "derived") {
+        return {
+          label: "ESTIMATED",
+          detail: `Projected from a fix ${formatDataAge(state.ageSeconds)}`,
+          style: STYLES.delayed,
+        };
+      }
+
+      if (state.freshness === "recent") {
+        return {
+          label: "LIVE",
+          detail: `Updated ${formatDataAge(state.ageSeconds)}`,
+          style: STYLES.recent,
         };
       }
 

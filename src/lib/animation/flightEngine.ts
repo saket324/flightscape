@@ -21,6 +21,7 @@
 import type {
   FlightPosition,
   FreshnessLevel,
+  PositionConfidence,
   RoutePoint,
 } from "@/types/flight";
 import { timing } from "@/config";
@@ -37,6 +38,8 @@ export type FlightSnapshot = {
   freshness: FreshnessLevel;
   /** The last actually-observed position, as distinct from the rendered one. */
   lastObserved: FlightPosition;
+  /** Provenance for the rendered position: source, age, observed vs derived. */
+  confidence: PositionConfidence;
 };
 
 type Listener = (snapshot: FlightSnapshot | null) => void;
@@ -47,7 +50,8 @@ const MAX_SAMPLES = 12;
 export function freshnessFor(ageSeconds: number): FreshnessLevel {
   if (ageSeconds >= timing.unavailableAfterSeconds) return "unavailable";
   if (ageSeconds >= timing.staleAfterSeconds) return "stale";
-  if (ageSeconds >= timing.delayedAfterSeconds) return "delayed";
+  if (ageSeconds >= timing.derivedAfterSeconds) return "derived";
+  if (ageSeconds >= timing.recentAfterSeconds) return "recent";
   return "live";
 }
 
@@ -73,6 +77,14 @@ export class FlightEngine {
    * clock would show a healthy feed as stale, or worse, a stale one as live.
    */
   private clockOffsetMs = 0;
+
+  /** Name of the provider these samples came from, for provenance. */
+  private sourceName = "unknown";
+
+  /** Record which provider is supplying samples. */
+  setSource(name: string): void {
+    this.sourceName = name;
+  }
 
   /** Wall-clock time as the server sees it. */
   now(clientNowMs: number = Date.now()): number {
@@ -152,7 +164,16 @@ export class FlightEngine {
     const position = samplePositionAt(this.samples, renderAt);
     if (!position) return null;
 
-    return { position, dataAgeSeconds, freshness, lastObserved };
+    const confidence: PositionConfidence = {
+      source: this.sourceName,
+      observedAt: lastObserved.timestamp,
+      ageSeconds: dataAgeSeconds,
+      // The coordinates count as observed only when nothing was projected.
+      observed: !position.isExtrapolated,
+      level: freshness,
+    };
+
+    return { position, dataAgeSeconds, freshness, lastObserved, confidence };
   }
 
   /** The rolling track of observed positions, oldest first. */
